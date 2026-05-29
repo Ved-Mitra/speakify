@@ -8,6 +8,9 @@ class AppConstants {
   /// App display name.
   static const String appName = 'Speakify';
 
+  // App Description
+  static const String appDes = 'Multi-device audio';
+
   /// Maximum number of Slave devices that can connect to a Master.
   static const int maxSlaveDevices = 10;
 
