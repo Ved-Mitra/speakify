@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:speakify/screens/device_list_screens.dart';
 import 'package:speakify/theme/theme.dart';
 import 'package:speakify/utils/constants.dart';
 import 'package:gradient_borders/gradient_borders.dart';
+import 'package:speakify/models/device_role.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -64,7 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: 'Master Device',
                 subtitle: 'Capture audio & broadcast',
                 onTap: () {
-                  debugPrint('Selected: Master');
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => DeviceListScreen(role: DeviceRole.master),
+                    ),
+                  );
                 },
               ),
               const SizedBox(height: 30),
@@ -74,7 +81,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: 'Slave Device',
                 subtitle: 'Connect & listen',
                 onTap: () {
-                  debugPrint('Selected: Slave');
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => DeviceListScreen(role: DeviceRole.slave),
+                    ),
+                  );
                 },
               ),
 
@@ -187,9 +199,7 @@ class FootNote extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text('v1.0.0', style: AppTextStyles.labelSmall),
-      ],
+      children: [Text('v1.0.0', style: AppTextStyles.labelSmall)],
     );
   }
 }
