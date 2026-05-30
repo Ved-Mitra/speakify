@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:speakify/theme/theme.dart';
-import 'package:speakify/theme/app_colors.dart';
 import 'package:speakify/utils/constants.dart';
 import 'package:gradient_borders/gradient_borders.dart';
 
@@ -8,157 +7,174 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreen();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreen extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      left: true,
-      right: true,
-      top: true,
-      bottom: true,
-      minimum: EdgeInsets.all(24),
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: Icon(
-              Icons.speaker_group_rounded,
-              size: 35,
-              color: AppColors.primary,
-            ),
-            onPressed: () {
-              // TODO: The Speaker icons rotates
-            },
-          ),
-          title: Align(
-            alignment: AlignmentGeometry.centerLeft,
-            child: Text(
-              AppConstants.appName,
-              style: TextStyle(
+    // Fix 1: Scaffold should wrap SafeArea, not the other way around.
+    // SafeArea is a widget that insets its child to avoid OS UI (notch, status bar).
+    // It must be INSIDE the Scaffold so the Scaffold background covers the full screen.
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            children: [
+              const SizedBox(height: 48),
+
+              // ── App Icon + Title (centered) ──────────────────────
+              // Fix 1: Instead of AppBar (which forces leading/title layout),
+              // use a simple Column to center the icon and title freely.
+              Icon(
+                Icons.speaker_group_rounded,
+                size: 64,
                 color: AppColors.primary,
-                fontWeight: FontWeight.bold,
-                fontSize: 32
               ),
-            ),
+              const SizedBox(height: 16),
+              Text(
+                AppConstants.appName,
+                style: AppTextStyles.displayMedium.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ── App Description (more dominant) ──────────────────
+              // Fix 4: Using displaySmall instead of headlineMedium,
+              // and adding a subtle primary tint to make it pop.
+              Text(
+                AppConstants.appDes,
+                style: AppTextStyles.displaySmall.copyWith(
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 1.2,
+                ),
+              ),
+
+              const Spacer(),
+
+              // ── Role Selection Cards ─────────────────────────────
+              // Fix 3: Wrapping each card in InkWell for tap feedback.
+              _RoleCard(
+                icon: Icons.cell_tower_rounded,
+                accentColor: AppColors.primary,
+                title: 'Master Device',
+                subtitle: 'Capture audio & broadcast',
+                onTap: () {
+                  debugPrint('Selected: Master');
+                },
+              ),
+              const SizedBox(height: 30),
+              _RoleCard(
+                icon: Icons.headphones_rounded,
+                accentColor: AppColors.secondary,
+                title: 'Slave Device',
+                subtitle: 'Connect & listen',
+                onTap: () {
+                  debugPrint('Selected: Slave');
+                },
+              ),
+
+              const Spacer(),
+
+              // ── Footer ───────────────────────────────────────────
+              const FootNote(),
+              const SizedBox(height: 16),
+            ],
           ),
-          centerTitle: true,
-        ),
-        body: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(height: 15),
-            Text(
-              AppConstants.appDes,
-              style: AppTextStyles.headlineMedium
-            ),
-            SizedBox(height: 16),
-            MasterDevice(),
-            SizedBox(height: 16),
-            SlaveDevices(),
-            Spacer(),
-            FootNote()
-          ],
         ),
       ),
     );
   }
 }
 
-class MasterDevice extends StatefulWidget {
-  const MasterDevice({super.key});
+/// A reusable, tappable role selection card.
+///
+/// Fix 2 & 3: Proper padding, Row layout with icon | text | arrow,
+/// and wrapped in Material + InkWell for ripple effect.
+class _RoleCard extends StatelessWidget {
+  final IconData icon;
+  final Color accentColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
 
-  @override
-  State<MasterDevice> createState() => _MasterDevice();
-}
-
-class _MasterDevice extends State<MasterDevice> {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceVariant,
-        borderRadius: BorderRadius.circular(20),
-        border: const GradientBoxBorder(
-          gradient: AppColors.cardGradient,
-          width: 4,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.15),
-            blurRadius: 20,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.cell_tower_rounded, color: AppColors.primary),
-          SizedBox(width: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Master Device', style: AppTextStyles.headlineSmall),
-              Text('Capture audio & broadcast', style: AppTextStyles.bodySmall),
-              Icon(Icons.arrow_forward_ios_rounded),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class SlaveDevices extends StatefulWidget {
-  const SlaveDevices({super.key});
-
-  @override
-  State<SlaveDevices> createState() => _SlaveDevices();
-}
-
-class _SlaveDevices extends State<SlaveDevices> {
-  int devicesConnected = 0;
-
-  // _SlaveDevice() {
-  //   devicesConnected = 0;
-  // }
-
-  int connection() {
-    return devicesConnected++;
-  }
+  const _RoleCard({
+    required this.icon,
+    required this.accentColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceVariant,
+    // Material is needed as an ancestor for InkWell's ripple to render.
+    // We set color to transparent because the Container below handles the background.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(20),
-        border: const GradientBoxBorder(
-          gradient: AppColors.cardGradient,
-          width: 4,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.secondary.withValues(alpha: 0.15),
-            blurRadius: 20,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.cell_tower_rounded, color: AppColors.secondary),
-          SizedBox(width: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Slave Devices', style: AppTextStyles.headlineSmall),
-              Text('Connect & Listen', style: AppTextStyles.bodySmall),
-              Icon(Icons.arrow_forward_ios_rounded),
+        // splashColor controls the ripple color when you tap.
+        splashColor: accentColor.withValues(alpha: 0.1),
+        // highlightColor controls the sustained press color.
+        highlightColor: accentColor.withValues(alpha: 0.05),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceVariant,
+            borderRadius: BorderRadius.circular(20),
+            border: const GradientBoxBorder(
+              gradient: AppColors.cardGradient,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: accentColor.withValues(alpha: 0.15),
+                blurRadius: 24,
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
+              ),
             ],
           ),
-        ],
+          // Fix 2: Row layout — Icon | Text Column | Spacer | Arrow
+          child: Row(
+            children: [
+              // Left icon in a subtle circular container
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: accentColor, size: 28),
+              ),
+              const SizedBox(width: 16),
+              // Title + subtitle
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: AppTextStyles.headlineSmall),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: AppTextStyles.bodySmall),
+                  ],
+                ),
+              ),
+              // Arrow pushed to far right
+              Icon(
+                Icons.arrow_forward_ios_rounded,
+                color: AppColors.textDisabled,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -170,7 +186,10 @@ class FootNote extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [Text('v1.0.0', style: AppTextStyles.labelSmall)]);
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text('v1.0.0', style: AppTextStyles.labelSmall),
+      ],
+    );
   }
 }
