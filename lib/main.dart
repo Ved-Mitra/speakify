@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'screens/home_screen.dart';
+import 'package:speakify/screens/splash_screen.dart';
 import 'theme/theme.dart';
 import 'utils/constants.dart';
 
@@ -25,7 +25,7 @@ class SpeakifyApp extends StatelessWidget {
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      home: const HomeScreen(),
+      home: const SplashScreen(),
     );
   }
 }
