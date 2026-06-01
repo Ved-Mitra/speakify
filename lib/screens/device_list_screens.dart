@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:speakify/models/device_role.dart';
+import 'package:speakify/models/slave_connection_type.dart';
 import 'package:speakify/theme/theme.dart';
 import 'package:speakify/models/peer_device.dart';
 import 'package:gradient_borders/gradient_borders.dart';
@@ -11,8 +12,6 @@ class DeviceListScreen extends StatefulWidget {
 
   @override
   State<DeviceListScreen> createState() => _DeviceListScreenState();
-  // FIX: Don't pass arguments to the State constructor.
-  // Access widget fields via `widget.role` inside the State class.
 }
 
 class _DeviceListScreenState extends State<DeviceListScreen> {
@@ -20,33 +19,61 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
   // Mock data — will be replaced with real discovery in Phase 1.
   final List<PeerDevice> _mockDevices = [
-    PeerDevice(id: '1', name: "Ved's Pixel 7", isConnected: true, latencyMs: 12),
-    PeerDevice(id: '2', name: "Phone 2", isConnected: true, latencyMs: 18),
-    PeerDevice(id: '3', name: "Phone 3", isConnected: false),
+    // Wi-Fi phone slaves
+    PeerDevice(
+      id: '1',
+      name: "Ved's Pixel 7",
+      connectionType: SlaveConnectionType.wifi,
+      isConnected: true,
+      latencyMs: 12,
+      ipAddress: '192.168.1.5',
+    ),
+    PeerDevice(
+      id: '2',
+      name: "Phone 2",
+      connectionType: SlaveConnectionType.wifi,
+      isConnected: true,
+      latencyMs: 18,
+      ipAddress: '192.168.1.8',
+    ),
+    PeerDevice(
+      id: '3',
+      name: "Phone 3",
+      connectionType: SlaveConnectionType.wifi,
+      isConnected: false,
+    ),
+    // Bluetooth device slaves
+    PeerDevice(
+      id: '4',
+      name: "JBL Flip 6",
+      connectionType: SlaveConnectionType.bluetoothSpeaker,
+      isConnected: true,
+      latencyMs: 170,
+    ),
+    PeerDevice(
+      id: '5',
+      name: "Sony WH-1000XM5",
+      connectionType: SlaveConnectionType.bluetoothHeadphones,
+      isConnected: false,
+    ),
   ];
 
   @override
   void initState() {
     super.initState();
-    // Simulate a 2-second search, then show device list.
     Future.delayed(const Duration(seconds: 1), () {
       if (mounted) {
-        setState(() {
-          _isSearching = false;
-        });
+        setState(() => _isSearching = false);
       }
     });
   }
 
-  // FIX #2: Capitalize first letter of enum name for display.
-  // `widget.role.name` returns "master" or "slave" (lowercase).
-  // This helper capitalizes it to "Master" or "Slave".
   String get _roleTitle {
     final name = widget.role.name;
     return '${name[0].toUpperCase()}${name.substring(1)} Mode';
   }
 
-  @override // FIX: Was missing @override annotation
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -56,12 +83,12 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         ),
         title: Text(_roleTitle),
       ),
-      // FIX: Use a Column with Expanded for the list area.
-      // ListView has infinite height — if placed directly inside a Column
-      // without Expanded, Flutter doesn't know how tall to make it → crash.
       body: _isSearching
           ? const _EmptySearchState()
-          : _DeviceListBody(devices: _mockDevices),
+          : _DeviceListBody(
+              devices: _mockDevices,
+              isMaster: widget.role == DeviceRole.master,
+            ),
     );
   }
 }
@@ -72,17 +99,16 @@ class _EmptySearchState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Center vertically + horizontally on the full screen body.
     return Center(
       child: Column(
-        mainAxisSize: MainAxisSize.min, // Shrink-wrap the column
+        mainAxisSize: MainAxisSize.min,
         children: [
           CircularProgressIndicator(color: AppColors.primary),
           const SizedBox(height: 24),
           Text('Searching for devices...', style: AppTextStyles.bodyLarge),
           const SizedBox(height: 8),
           Text(
-            'Make sure all devices are on the same Wi-Fi network',
+            'Scanning Wi-Fi network and Bluetooth...',
             style: AppTextStyles.bodySmall,
             textAlign: TextAlign.center,
           ),
@@ -92,62 +118,166 @@ class _EmptySearchState extends StatelessWidget {
   }
 }
 
-/// Shows the connection count header + scrollable device list.
+/// Shows two sections: Wi-Fi Phones and Bluetooth Devices.
 class _DeviceListBody extends StatelessWidget {
   final List<PeerDevice> devices;
-  // FIX: Widget fields must always be `final`.
-  const _DeviceListBody({required this.devices});
+  final bool isMaster;
+  const _DeviceListBody({required this.devices, required this.isMaster});
 
   @override
   Widget build(BuildContext context) {
-    final connectedCount = devices.where((d) => d.isConnected).length;
+    final wifiDevices = devices.where((d) => d.isWifi).toList();
+    final btDevices = devices.where((d) => d.isBluetooth).toList();
+    final totalConnected = devices.where((d) => d.isConnected).length;
 
-    return Column(
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
-        // ── Connection count header ──────────────────────────────
+        // ── Overall status ─────────────────────────────────────
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Connected Devices', style: AppTextStyles.titleLarge),
-              Text(
-                '$connectedCount/${AppConstants.maxSlaveDevices}',
-                style: AppTextStyles.titleMedium.copyWith(
-                  color: AppColors.primary,
+              Text('All Connected', style: AppTextStyles.titleLarge),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$totalConnected/${AppConstants.maxSlaveDevices}',
+                  style: AppTextStyles.titleMedium.copyWith(
+                    color: AppColors.primary,
+                  ),
                 ),
               ),
             ],
           ),
         ),
 
-        // ── Device list ──────────────────────────────────────────
-        // FIX: Wrap ListView.builder in Expanded so it knows how
-        // much vertical space it can use inside this Column.
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: devices.length,
-            // FIX: itemBuilder is a FUNCTION (context, index) => Widget,
-            // not a widget instance. It gets called once per item.
-            itemBuilder: (context, index) {
-              final device = devices[index];
-              return Padding(
+        // ── Wi-Fi Phones Section ───────────────────────────────
+        _SectionHeader(
+          icon: Icons.wifi_rounded,
+          title: 'Phones (Wi-Fi)',
+          color: AppColors.primary,
+          count: wifiDevices.where((d) => d.isConnected).length,
+        ),
+        const SizedBox(height: 8),
+        ...wifiDevices.map((device) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _DeviceTile(device: device),
+            )),
+
+        const SizedBox(height: 20),
+
+        // ── Bluetooth Devices Section ──────────────────────────
+        _SectionHeader(
+          icon: Icons.bluetooth_rounded,
+          title: 'Bluetooth Devices',
+          color: AppColors.secondary,
+          count: btDevices.where((d) => d.isConnected).length,
+        ),
+        const SizedBox(height: 8),
+        if (btDevices.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+            child: Text(
+              'No Bluetooth audio devices found.\nMake sure your speaker/headphones are in pairing mode.',
+              style: AppTextStyles.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          )
+        else
+          ...btDevices.map((device) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _DeviceTile(device: device),
-              );
-            },
+              )),
+
+        // Only show on Master mode
+        if (isMaster) ...[
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              '⚠️  Bluetooth devices may have ~150ms extra latency.\n'
+              'Wi-Fi phone playback will be delayed to stay in sync.',
+              style: AppTextStyles.labelSmall.copyWith(
+                color: AppColors.warning.withValues(alpha: 0.7),
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
-        ),
+        ],
+        const SizedBox(height: 24),
       ],
     );
   }
 }
 
-/// A single device tile in the list.
+/// Section header with icon, title, and connected count.
+class _SectionHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final Color color;
+  final int count;
+
+  const _SectionHeader({
+    required this.icon,
+    required this.title,
+    required this.color,
+    required this.count,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: AppTextStyles.titleMedium.copyWith(color: color),
+          ),
+          const Spacer(),
+          Text(
+            '$count connected',
+            style: AppTextStyles.labelSmall.copyWith(
+              color: color.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single device tile — adapts icon based on connection type.
 class _DeviceTile extends StatelessWidget {
   final PeerDevice device;
   const _DeviceTile({required this.device});
+
+  IconData get _deviceIcon {
+    switch (device.connectionType) {
+      case SlaveConnectionType.wifi:
+        return Icons.phone_iphone_outlined;
+      case SlaveConnectionType.bluetoothSpeaker:
+        return Icons.speaker_rounded;
+      case SlaveConnectionType.bluetoothHeadphones:
+        return Icons.headphones_rounded;
+    }
+  }
+
+  String get _statusText {
+    if (!device.isConnected) return 'Not connected';
+    if (device.isBluetooth) {
+      return '~${device.latencyMs ?? "?"}ms BT latency';
+    }
+    return '${device.latencyMs ?? "?"}ms latency';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -158,7 +288,7 @@ class _DeviceTile extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          debugPrint('Tapped device: ${device.name}');
+          debugPrint('Tapped device: ${device.name} (${device.connectionType.name})');
         },
         splashColor: accentColor.withValues(alpha: 0.1),
         highlightColor: accentColor.withValues(alpha: 0.05),
@@ -183,7 +313,7 @@ class _DeviceTile extends StatelessWidget {
           ),
           child: Row(
             children: [
-              // Phone icon in a tinted container
+              // Device icon in a tinted container
               Container(
                 width: 52,
                 height: 52,
@@ -191,31 +321,50 @@ class _DeviceTile extends StatelessWidget {
                   color: accentColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Icon(
-                  Icons.phone_iphone_outlined,
-                  color: accentColor,
-                  size: 28,
-                ),
+                child: Icon(_deviceIcon, color: accentColor, size: 28),
               ),
               const SizedBox(width: 16),
-              // Device name + latency
+              // Device name + latency/status
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(device.name, style: AppTextStyles.headlineSmall),
                     const SizedBox(height: 4),
-                    Text(
-                      device.isConnected
-                          ? '${device.latencyMs ?? "?"}ms latency'
-                          : 'Not connected',
-                      style: AppTextStyles.bodySmall,
-                    ),
+                    Text(_statusText, style: AppTextStyles.bodySmall),
                   ],
                 ),
               ),
-              // Status dot (green = connected, grey = not)
-              CircleAvatar(radius: 5, backgroundColor: accentColor),
+              // Connection type badge + status dot
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Small badge showing connection type
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: (device.isBluetooth
+                              ? AppColors.secondary
+                              : AppColors.primary)
+                          .withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      device.isBluetooth ? 'BT' : 'Wi-Fi',
+                      style: AppTextStyles.labelSmall.copyWith(
+                        color:
+                            device.isBluetooth ? AppColors.secondary : AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  CircleAvatar(radius: 5, backgroundColor: accentColor),
+                ],
+              ),
             ],
           ),
         ),
