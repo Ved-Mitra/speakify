@@ -4,6 +4,7 @@ import 'package:speakify/theme/theme.dart';
 import 'package:speakify/utils/constants.dart';
 import 'package:gradient_borders/gradient_borders.dart';
 import 'package:speakify/models/device_role.dart';
+import 'package:speakify/utils/permissions.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -13,6 +14,45 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  /// Request permissions, then navigate to DeviceListScreen if granted.
+  /// Shows a SnackBar if denied, with a Settings button if permanently denied.
+  Future<void> _navigateWithPermissions(DeviceRole role) async {
+    final granted = await PermissionHelper.requestAllPermissions();
+
+    if (!mounted) return;
+
+    if (granted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DeviceListScreen(role: role),
+        ),
+      );
+    } else {
+      // Check if any permission was permanently denied
+      final permanentlyDenied = await PermissionHelper.isAnyPermanentlyDenied();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Permissions required for device discovery',
+          ),
+          action: permanentlyDenied
+              ? SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () => PermissionHelper.openSettings(),
+                )
+              : SnackBarAction(
+                  label: 'Retry',
+                  onPressed: () => _navigateWithPermissions(role),
+                ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Fix 1: Scaffold should wrap SafeArea, not the other way around.
@@ -59,20 +99,12 @@ class _HomeScreenState extends State<HomeScreen> {
               const Spacer(),
 
               // ── Role Selection Cards ─────────────────────────────
-              // Fix 3: Wrapping each card in InkWell for tap feedback.
               _RoleCard(
                 icon: Icons.cell_tower_rounded,
                 accentColor: AppColors.primary,
                 title: 'Master Device',
                 subtitle: 'Capture audio & broadcast',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => DeviceListScreen(role: DeviceRole.master),
-                    ),
-                  );
-                },
+                onTap: () => _navigateWithPermissions(DeviceRole.master),
               ),
               const SizedBox(height: 30),
               _RoleCard(
@@ -80,14 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 accentColor: AppColors.secondary,
                 title: 'Slave Device',
                 subtitle: 'Connect & listen',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => DeviceListScreen(role: DeviceRole.slave),
-                    ),
-                  );
-                },
+                onTap: () => _navigateWithPermissions(DeviceRole.slave),
               ),
 
               const Spacer(),
