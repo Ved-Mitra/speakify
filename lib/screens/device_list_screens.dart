@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:speakify/models/device_role.dart';
 import 'package:speakify/models/slave_connection_type.dart';
@@ -5,6 +6,7 @@ import 'package:speakify/theme/theme.dart';
 import 'package:speakify/models/peer_device.dart';
 import 'package:gradient_borders/gradient_borders.dart';
 import 'package:speakify/utils/constants.dart';
+import 'package:speakify/services/bluetooth_scan_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -17,9 +19,13 @@ class DeviceListScreen extends StatefulWidget {
 class _DeviceListScreenState extends State<DeviceListScreen> {
   bool _isSearching = true;
 
-  // Mock data — will be replaced with real discovery in Phase 1.
-  final List<PeerDevice> _mockDevices = [
-    // Wi-Fi phone slaves
+  // ── Bluetooth scanning ─────────────────────────────────────
+  late BluetoothScanService _btService;
+  List<PeerDevice> _btDevices = [];
+  StreamSubscription<List<PeerDevice>>? _btSubscription;
+
+  // ── Mock Wi-Fi data (will be replaced in Phase 1, Step 3) ──
+  final List<PeerDevice> _mockWifiDevices = [
     PeerDevice(
       id: '1',
       name: "Ved's Pixel 7",
@@ -42,30 +48,48 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       connectionType: SlaveConnectionType.wifi,
       isConnected: false,
     ),
-    // Bluetooth device slaves
-    PeerDevice(
-      id: '4',
-      name: "JBL Flip 6",
-      connectionType: SlaveConnectionType.bluetoothSpeaker,
-      isConnected: true,
-      latencyMs: 170,
-    ),
-    PeerDevice(
-      id: '5',
-      name: "Sony WH-1000XM5",
-      connectionType: SlaveConnectionType.bluetoothHeadphones,
-      isConnected: false,
-    ),
   ];
+
+  /// All devices combined (Wi-Fi mock + real BT scan results).
+  List<PeerDevice> get _allDevices => [..._mockWifiDevices, ..._btDevices];
 
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(seconds: 1), () {
+
+    // Initialize BT scanning service.
+    _btService = BluetoothScanService();
+
+    // Listen to discovered BT devices and update the UI.
+    _btSubscription = _btService.discoveredDevices.listen((devices) {
       if (mounted) {
-        setState(() => _isSearching = false);
+        setState(() {
+          _btDevices = devices;
+        });
       }
     });
+
+    // Start scanning — runs async in the background.
+    _startScanning();
+  }
+
+  Future<void> _startScanning() async {
+    setState(() => _isSearching = true);
+
+    // Start BT scan (runs for ~15 seconds).
+    await _btService.startScan();
+
+    // Once scan completes, hide the loading spinner.
+    if (mounted) {
+      setState(() => _isSearching = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _btSubscription?.cancel();
+    _btService.dispose();
+    super.dispose();
   }
 
   String get _roleTitle {
@@ -75,6 +99,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Show search state only if we have zero devices AND still scanning.
+    // Once any device appears (even during scan), show the list.
+    final showSearching = _isSearching && _allDevices.isEmpty;
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -82,11 +110,30 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
           icon: const Icon(Icons.arrow_back_ios_rounded),
         ),
         title: Text(_roleTitle),
+        actions: [
+          // Rescan button in the app bar.
+          if (!_isSearching)
+            IconButton(
+              onPressed: _startScanning,
+              icon: const Icon(Icons.refresh_rounded),
+              tooltip: 'Rescan',
+            ),
+          // Show a small spinner in the app bar while scanning.
+          if (_isSearching)
+            const Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+        ],
       ),
-      body: _isSearching
+      body: showSearching
           ? const _EmptySearchState()
           : _DeviceListBody(
-              devices: _mockDevices,
+              devices: _allDevices,
               isMaster: widget.role == DeviceRole.master,
             ),
     );
