@@ -7,6 +7,7 @@ import 'package:speakify/models/peer_device.dart';
 import 'package:gradient_borders/gradient_borders.dart';
 import 'package:speakify/utils/constants.dart';
 import 'package:speakify/services/bluetooth_scan_service.dart';
+import 'package:speakify/services/wifi_connection_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -24,64 +25,76 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   List<PeerDevice> _btDevices = [];
   StreamSubscription<List<PeerDevice>>? _btSubscription;
 
-  // ── Mock Wi-Fi data (will be replaced in Phase 1, Step 3) ──
-  final List<PeerDevice> _mockWifiDevices = [
-    PeerDevice(
-      id: '1',
-      name: "Ved's Pixel 7",
-      connectionType: SlaveConnectionType.wifi,
-      isConnected: true,
-      latencyMs: 12,
-      ipAddress: '192.168.1.5',
-    ),
-    PeerDevice(
-      id: '2',
-      name: "Phone 2",
-      connectionType: SlaveConnectionType.wifi,
-      isConnected: true,
-      latencyMs: 18,
-      ipAddress: '192.168.1.8',
-    ),
-    PeerDevice(
-      id: '3',
-      name: "Phone 3",
-      connectionType: SlaveConnectionType.wifi,
-      isConnected: false,
-    ),
-  ];
+  // ── Wi-Fi connection service ───────────────────────────────
+  late WifiConnectionService _wifiService;
+  List<PeerDevice> _wifiDevices = [];
+  StreamSubscription<List<PeerDevice>>? _wifiSubscription;
 
-  /// All devices combined (Wi-Fi mock + real BT scan results).
-  List<PeerDevice> get _allDevices => [..._mockWifiDevices, ..._btDevices];
+  // ── Slave mode: IP input ───────────────────────────────────
+  final TextEditingController _ipController = TextEditingController();
+  bool _isConnecting = false;
+
+  /// All devices combined (real Wi-Fi + real BT scan results).
+  List<PeerDevice> get _allDevices => [..._wifiDevices, ..._btDevices];
 
   @override
   void initState() {
     super.initState();
 
-    // Initialize BT scanning service.
+    // ── Bluetooth scanning ────────────────────────────────────
     _btService = BluetoothScanService();
-
-    // Listen to discovered BT devices and update the UI.
     _btSubscription = _btService.discoveredDevices.listen((devices) {
-      if (mounted) {
-        setState(() {
-          _btDevices = devices;
-        });
-      }
+      if (mounted) setState(() => _btDevices = devices);
     });
 
-    // Start scanning — runs async in the background.
-    _startScanning();
+    // ── Wi-Fi connection service ──────────────────────────────
+    _wifiService = WifiConnectionService();
+    _wifiSubscription = _wifiService.connectedDevicesStream.listen((devices) {
+      if (mounted) setState(() => _wifiDevices = devices);
+    });
+
+    // Start scanning / server based on role.
+    _initialize();
   }
 
-  Future<void> _startScanning() async {
+  Future<void> _initialize() async {
     setState(() => _isSearching = true);
 
-    // Start BT scan (runs for ~15 seconds).
-    await _btService.startScan();
+    // Start BT scan (both Master and Slave can see BT devices).
+    _btService.startScan();
 
-    // Once scan completes, hide the loading spinner.
+    // Master: start the TCP server.
+    if (widget.role == DeviceRole.master) {
+      await _wifiService.startServer();
+      // Force a rebuild to show the IP address.
+      if (mounted) setState(() {});
+    }
+
+    // Wait for BT scan to produce some results, then hide spinner.
+    await Future.delayed(const Duration(seconds: 3));
+    if (mounted) setState(() => _isSearching = false);
+  }
+
+  Future<void> _rescan() async {
+    setState(() => _isSearching = true);
+    _btService.stopScan();
+    await _btService.startScan();
+    if (mounted) setState(() => _isSearching = false);
+  }
+
+  /// Slave mode: connect to the Master's IP.
+  Future<void> _connectToMaster() async {
+    final ip = _ipController.text.trim();
+    if (ip.isEmpty) return;
+
+    setState(() => _isConnecting = true);
+    final success = await _wifiService.connectToMaster(ip);
     if (mounted) {
-      setState(() => _isSearching = false);
+      setState(() => _isConnecting = false);
+      if (success) {
+        // Clear the text field after successful connection.
+        _ipController.clear();
+      }
     }
   }
 
@@ -89,6 +102,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   void dispose() {
     _btSubscription?.cancel();
     _btService.dispose();
+    _wifiSubscription?.cancel();
+    _wifiService.dispose();
+    _ipController.dispose();
     super.dispose();
   }
 
@@ -99,9 +115,8 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Show search state only if we have zero devices AND still scanning.
-    // Once any device appears (even during scan), show the list.
     final showSearching = _isSearching && _allDevices.isEmpty;
+    final isMaster = widget.role == DeviceRole.master;
 
     return Scaffold(
       appBar: AppBar(
@@ -111,14 +126,12 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         ),
         title: Text(_roleTitle),
         actions: [
-          // Rescan button in the app bar.
           if (!_isSearching)
             IconButton(
-              onPressed: _startScanning,
+              onPressed: _rescan,
               icon: const Icon(Icons.refresh_rounded),
               tooltip: 'Rescan',
             ),
-          // Show a small spinner in the app bar while scanning.
           if (_isSearching)
             const Padding(
               padding: EdgeInsets.only(right: 16),
@@ -134,7 +147,12 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
           ? const _EmptySearchState()
           : _DeviceListBody(
               devices: _allDevices,
-              isMaster: widget.role == DeviceRole.master,
+              isMaster: isMaster,
+              masterIp: isMaster ? _wifiService.localIp : null,
+              slaveIpController: !isMaster ? _ipController : null,
+              isConnecting: _isConnecting,
+              isConnectedToMaster: _wifiService.isConnectedToMaster,
+              onConnect: !isMaster ? _connectToMaster : null,
             ),
     );
   }
@@ -166,10 +184,25 @@ class _EmptySearchState extends StatelessWidget {
 }
 
 /// Shows two sections: Wi-Fi Phones and Bluetooth Devices.
+/// Also shows Master IP or Slave IP input depending on the role.
 class _DeviceListBody extends StatelessWidget {
   final List<PeerDevice> devices;
   final bool isMaster;
-  const _DeviceListBody({required this.devices, required this.isMaster});
+  final String? masterIp;
+  final TextEditingController? slaveIpController;
+  final bool isConnecting;
+  final bool isConnectedToMaster;
+  final VoidCallback? onConnect;
+
+  const _DeviceListBody({
+    required this.devices,
+    required this.isMaster,
+    this.masterIp,
+    this.slaveIpController,
+    this.isConnecting = false,
+    this.isConnectedToMaster = false,
+    this.onConnect,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -180,6 +213,21 @@ class _DeviceListBody extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
+        // ── Master: Show IP address ────────────────────────────
+        if (isMaster && masterIp != null)
+          _MasterIpBanner(ip: masterIp!),
+
+        // ── Slave: Show IP input + Connect button ──────────────
+        if (!isMaster)
+          _SlaveConnectCard(
+            controller: slaveIpController!,
+            isConnecting: isConnecting,
+            isConnected: isConnectedToMaster,
+            onConnect: onConnect!,
+          ),
+
+        const SizedBox(height: 12),
+
         // ── Overall status ─────────────────────────────────────
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
@@ -212,10 +260,20 @@ class _DeviceListBody extends StatelessWidget {
           count: wifiDevices.where((d) => d.isConnected).length,
         ),
         const SizedBox(height: 8),
-        ...wifiDevices.map((device) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _DeviceTile(device: device),
-            )),
+        if (wifiDevices.isEmpty && isMaster)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+            child: Text(
+              'Waiting for phone slaves to connect...\nShare your IP address with other devices.',
+              style: AppTextStyles.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          )
+        else
+          ...wifiDevices.map((device) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _DeviceTile(device: device),
+              )),
 
         const SizedBox(height: 20),
 
@@ -259,6 +317,172 @@ class _DeviceListBody extends StatelessWidget {
         ],
         const SizedBox(height: 24),
       ],
+    );
+  }
+}
+
+/// Banner showing the Master's IP address for Slaves to connect to.
+class _MasterIpBanner extends StatelessWidget {
+  final String ip;
+  const _MasterIpBanner({required this.ip});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.wifi_tethering_rounded, color: AppColors.primary, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Your IP Address', style: AppTextStyles.labelSmall),
+                const SizedBox(height: 4),
+                Text(
+                  ip,
+                  style: AppTextStyles.headlineSmall.copyWith(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Share this with other devices to connect',
+                  style: AppTextStyles.labelSmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Card with an IP text field and Connect button for Slave mode.
+class _SlaveConnectCard extends StatelessWidget {
+  final TextEditingController controller;
+  final bool isConnecting;
+  final bool isConnected;
+  final VoidCallback onConnect;
+
+  const _SlaveConnectCard({
+    required this.controller,
+    required this.isConnecting,
+    required this.isConnected,
+    required this.onConnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isConnected
+              ? AppColors.success.withValues(alpha: 0.5)
+              : AppColors.primary.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Status row
+          Row(
+            children: [
+              Icon(
+                isConnected ? Icons.check_circle_rounded : Icons.wifi_rounded,
+                color: isConnected ? AppColors.success : AppColors.primary,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isConnected ? 'Connected to Master' : 'Connect to Master',
+                style: AppTextStyles.titleMedium.copyWith(
+                  color: isConnected ? AppColors.success : AppColors.primary,
+                ),
+              ),
+            ],
+          ),
+          if (!isConnected) ...[
+            const SizedBox(height: 12),
+            // IP input field
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: AppTextStyles.bodyLarge,
+              decoration: InputDecoration(
+                hintText: 'Enter Master IP (e.g., 192.168.1.5)',
+                hintStyle: AppTextStyles.bodySmall,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.primary, width: 2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Connect button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: isConnecting ? null : onConnect,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.background,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: isConnecting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        'Connect',
+                        style: AppTextStyles.titleMedium.copyWith(
+                          color: AppColors.background,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
