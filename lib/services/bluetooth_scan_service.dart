@@ -4,24 +4,28 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speakify/models/peer_device.dart';
 import 'package:speakify/models/slave_connection_type.dart';
 
-/// Service that scans for nearby Bluetooth audio devices
+/// Service that discovers nearby Bluetooth audio devices
 /// and exposes them as a stream of [PeerDevice] objects.
+///
+/// Uses TWO discovery methods:
+/// 1. **Bonded devices** — already-paired classic BT devices (neckbands, speakers, etc.)
+/// 2. **BLE scan** — discovers BLE-advertising devices (modern speakers/headphones)
+///
+/// Most audio devices use classic Bluetooth (A2DP), NOT BLE.
+/// So we rely primarily on bonded devices for audio device discovery.
 class BluetoothScanService {
   // ── Stream setup ─────────────────────────────────────────────
-  // A broadcast StreamController allows multiple widgets to listen.
   final StreamController<List<PeerDevice>> _deviceController =
       StreamController<List<PeerDevice>>.broadcast();
 
   /// The UI listens to this stream to get live device updates.
   Stream<List<PeerDevice>> get discoveredDevices => _deviceController.stream;
 
-  // Deduplication map — keyed by MAC address (remoteId).
+  // Deduplication map — keyed by MAC address.
   final Map<String, PeerDevice> _foundDevices = {};
 
-  // Keep track of scan subscription so we can cancel it.
+  // Keep track of subscriptions so we can cancel them.
   StreamSubscription<List<ScanResult>>? _scanSubscription;
-
-  // Track Bluetooth adapter state subscription.
   StreamSubscription<BluetoothAdapterState>? _adapterSubscription;
 
   /// Whether Bluetooth is currently on.
@@ -32,8 +36,7 @@ class BluetoothScanService {
 
   // ── Start scanning ───────────────────────────────────────────
 
-  /// Begin scanning for nearby Bluetooth devices.
-  /// Scans for [timeout] duration, then stops automatically.
+  /// Discover Bluetooth devices using both bonded devices + BLE scan.
   Future<void> startScan({Duration timeout = const Duration(seconds: 15)}) async {
     // First, check if Bluetooth adapter is on.
     _adapterSubscription = FlutterBluePlus.adapterState.listen((state) {
@@ -45,10 +48,8 @@ class BluetoothScanService {
 
     if (!isBluetoothOn) {
       debugPrint('BluetoothScanService: Bluetooth is OFF');
-      // Try to turn it on (Android only — shows a system dialog).
       try {
         await FlutterBluePlus.turnOn();
-        // Wait for it to turn on.
         await Future.delayed(const Duration(seconds: 1));
       } catch (e) {
         debugPrint('BluetoothScanService: Could not turn on Bluetooth: $e');
@@ -56,54 +57,74 @@ class BluetoothScanService {
       }
     }
 
-    // Clear previous results.
     _foundDevices.clear();
     isScanning = true;
 
-    // Listen to scan results.
-    // FlutterBluePlus.scanResults emits a List<ScanResult> each time
-    // a new device is found or an existing one is updated.
+    // ── Step 1: Get already-paired (bonded) classic BT devices ──
+    // This is the PRIMARY way to find audio devices like neckbands,
+    // speakers, and headphones. They use classic Bluetooth (A2DP),
+    // which BLE scanning does NOT detect.
+    try {
+      final bondedDevices = await FlutterBluePlus.bondedDevices;
+      debugPrint('BluetoothScanService: Found ${bondedDevices.length} bonded devices');
+
+      for (final device in bondedDevices) {
+        final name = device.platformName;
+        if (name.isEmpty) continue;
+
+        final macAddress = device.remoteId.str;
+        _foundDevices[macAddress] = PeerDevice(
+          id: macAddress,
+          name: name,
+          connectionType: _guessDeviceTypeFromName(name),
+          isConnected: false,
+          latencyMs: null,
+        );
+        debugPrint('  Bonded: $name ($macAddress)');
+      }
+
+      // Push bonded devices to UI immediately.
+      _emitDevices();
+    } catch (e) {
+      debugPrint('BluetoothScanService: Error getting bonded devices: $e');
+    }
+
+    // ── Step 2: BLE scan for additional devices ─────────────────
+    // Some modern audio devices also advertise via BLE.
+    // This catches any that aren't already paired.
     _scanSubscription = FlutterBluePlus.scanResults.listen(
       (results) {
         for (final result in results) {
-          // Skip devices with no name (unnamed BT devices are usually
-          // not audio devices and would clutter the list).
           final deviceName = result.device.platformName;
           if (deviceName.isEmpty) continue;
 
-          // Convert to PeerDevice and deduplicate by MAC address.
           final macAddress = result.device.remoteId.str;
+          // Don't overwrite bonded devices (they're higher priority).
+          if (_foundDevices.containsKey(macAddress)) continue;
+
           _foundDevices[macAddress] = PeerDevice(
             id: macAddress,
             name: deviceName,
-            connectionType: _guessDeviceType(result),
+            connectionType: _guessDeviceTypeFromName(deviceName),
             isConnected: false,
-            // RSSI can give rough distance indication, but not latency.
-            // Actual latency depends on codec, measured later.
             latencyMs: null,
           );
+          debugPrint('  BLE discovered: $deviceName ($macAddress)');
         }
-
-        // Push updated device list to the UI.
-        if (!_deviceController.isClosed) {
-          _deviceController.add(_foundDevices.values.toList());
-        }
+        _emitDevices();
       },
       onError: (error) {
-        debugPrint('BluetoothScanService: Scan error: $error');
+        debugPrint('BluetoothScanService: BLE scan error: $error');
       },
     );
 
-    // Start the actual scan.
-    // withServices: [] means scan for ALL devices (no filter).
-    // androidScanMode is balanced between power and latency.
     try {
       await FlutterBluePlus.startScan(
         timeout: timeout,
         androidScanMode: AndroidScanMode.balanced,
       );
     } catch (e) {
-      debugPrint('BluetoothScanService: startScan failed: $e');
+      debugPrint('BluetoothScanService: BLE startScan failed: $e');
     }
 
     isScanning = false;
@@ -111,7 +132,7 @@ class BluetoothScanService {
 
   // ── Stop scanning ────────────────────────────────────────────
 
-  /// Stop an ongoing scan.
+  /// Stop an ongoing BLE scan.
   Future<void> stopScan() async {
     try {
       await FlutterBluePlus.stopScan();
@@ -124,32 +145,41 @@ class BluetoothScanService {
   // ── Device type heuristic ────────────────────────────────────
 
   /// Guess whether a device is a speaker or headphones based on its name.
-  ///
-  /// This is a simple heuristic — in production you'd check the
-  /// Bluetooth Class of Device (CoD) bits for more accuracy.
-  SlaveConnectionType _guessDeviceType(ScanResult result) {
-    final name = result.device.platformName.toLowerCase();
+  SlaveConnectionType _guessDeviceTypeFromName(String name) {
+    final lower = name.toLowerCase();
 
-    // Common headphone naming patterns
-    if (name.contains('headphone') ||
-        name.contains('buds') ||
-        name.contains('airpod') ||
-        name.contains('earbuds') ||
-        name.contains('wh-') || // Sony WH- series headphones
-        name.contains('wf-') || // Sony WF- series earbuds
-        name.contains('earpod') ||
-        name.contains('freebuds')) {
+    // Common headphone/earbuds naming patterns
+    if (lower.contains('headphone') ||
+        lower.contains('buds') ||
+        lower.contains('airpod') ||
+        lower.contains('earbuds') ||
+        lower.contains('earpod') ||
+        lower.contains('freebuds') ||
+        lower.contains('neckband') ||
+        lower.contains('wh-') || // Sony WH- series headphones
+        lower.contains('wf-') || // Sony WF- series earbuds
+        lower.contains('earphone') ||
+        lower.contains('pods') ||
+        lower.contains('band')) {
       return SlaveConnectionType.bluetoothHeadphones;
     }
 
-    // Default to speaker for other audio devices
+    // Default to speaker for other BT audio devices
     return SlaveConnectionType.bluetoothSpeaker;
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────
+
+  /// Push the current device list to the UI stream.
+  void _emitDevices() {
+    if (!_deviceController.isClosed) {
+      _deviceController.add(_foundDevices.values.toList());
+    }
   }
 
   // ── Cleanup ──────────────────────────────────────────────────
 
   /// Dispose all subscriptions and close the stream controller.
-  /// Call this when the service is no longer needed.
   void dispose() {
     _scanSubscription?.cancel();
     _adapterSubscription?.cancel();
