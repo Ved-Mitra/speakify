@@ -3,14 +3,15 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:speakify/models/peer_device.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:speakify/utils/device_data.dart';
 import 'package:speakify/widgets/toast.dart';
 
 class WifiConnectionService {
-  var port = 5354;
-  late Future<String?> masterIp;
-  late Map<String, Socket> connectedDevices;
+  late ServerSocket _server;
+  final int _port = 5354;
+  late Future<String?> _masterIp;
+  final List<PeerDevice> _connectedDevices = [];
+  late Map<String, Socket> _client; //id-->socket
 
   //   Map<String, dynamic> message = {
   //     "type": "handshake",
@@ -27,33 +28,78 @@ class WifiConnectionService {
 
   Future<void> startServer() async {
     try {
-      ServerSocket server = await ServerSocket.bind(
-        InternetAddress.anyIPv4,
-        port,
-      );
-      masterIp = NetworkInfo().getWifiIP();
-      debugPrint('Server started at port $port');
+      _server = await ServerSocket.bind(InternetAddress.anyIPv4, _port);
+      _masterIp = NetworkInfo().getWifiIP();
+      debugPrint('Server started at port $_port');
 
-      server.listen((Socket client) {
+      _server.listen((Socket client) {
         debugPrint('Client Connected at ${client.remoteAddress.address}');
-
-        client.listen((List<int> data) {
-          debugPrint('Message Received ${utf8.decode(data)}');
-
-          String encoded = '${jsonEncode(message)}\n';
-          client.write(encoded);
-        });
-      });
+        __handleNewConnection(client);
+      }, cancelOnError: true);
     } catch (e) {
       debugPrint('Error Starting TCP Sever $e');
     }
   }
 
-  Future<void> disconnect() async {}
+  void __handleNewConnection(Socket clientSocket) {
+    bool isHandShakeDone = false;
+    PeerDevice? currentDevice;
+
+    clientSocket.listen(
+      (List<int> data) {
+        String clientMessage = utf8.decode(data);
+        Map<String, dynamic> message = jsonDecode(clientMessage);
+
+        if (message["type"] == "handshake" && !isHandShakeDone) {
+          isHandShakeDone = true;
+          Map<String, dynamic> serverMessage = {
+            "type": "welcome",
+            "deviceName": message["deviceName"],
+            "deviceId": message["deviceId"],
+            "timestamp": DateTime.now().millisecondsSinceEpoch,
+          };
+
+          currentDevice = PeerDevice(
+            id: message["deviceId"],
+            name: message["deviceName"],
+          );
+          _connectedDevices.add(currentDevice!);
+          _client[message["deviceId"]] = clientSocket;
+
+          String encoded = jsonEncode(serverMessage);
+          clientSocket.write(encoded);
+        } else {
+          _handleOngoingConnection(clientSocket);
+        }
+      },
+      onError: (e) {
+        debugPrint('Error : $e');
+      },
+      onDone: () {
+        _handleDisconnection(clientSocket, currentDevice);
+      },
+      cancelOnError: true,
+    );
+  }
+
+  void _handleOngoingConnection(Socket clientSocket) {}
+
+  void _handleDisconnection(Socket clientSocket, PeerDevice? clientDevice) {
+    clientSocket.close();
+
+    if (clientDevice != null) {
+      _connectedDevices.removeWhere((device) => device.id == clientDevice.id);
+      showToast('${clientDevice.name} disconnected');
+    }
+  }
 
   Future<void> connectToServer() async {
     try {
-      Socket socket = await Socket.connect(masterIp, port,timeout: Duration(seconds: 5));
+      Socket socket = await Socket.connect(
+        _masterIp,
+        _port,
+        timeout: Duration(seconds: 5),
+      );
       debugPrint(
         'Connected to: ${socket.remoteAddress.address}:${socket.remotePort}',
       );
@@ -91,15 +137,37 @@ class WifiConnectionService {
           debugPrint('Server closed the connection');
           socket.close();
         },
+        cancelOnError: true,
       );
     } catch (e) {
       debugPrint('Unable to connect $e');
     }
   }
 
-  Future<void> kickClient() async {}
+  Future<void> disconnect(String id) async {
+    
+  }
 
-  Future<void> stopServer() async {}
+  Future<void> kickClient(String id) async {
+    _client[id]!.close();
+    _connectedDevices.removeWhere((device) => device.id == id);
+    showToast('Device removed');
+  }
 
-  void dispose() {}
+  Future<void> stopServer() async {
+    for (var client in _client.entries) {
+      client.value.close();
+    }
+    _connectedDevices.clear();
+    _client.clear();
+    await _server.close();
+  }
+
+  Future<void> dispose() async {
+    for (var client in _client.entries) {
+      client.value.close();
+    }
+    _client.clear();
+    await _server.close();
+  }
 }
