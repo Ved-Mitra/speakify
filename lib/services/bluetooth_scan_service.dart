@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speakify/models/peer_device.dart';
 import 'package:speakify/models/slave_connection_type.dart';
+import 'package:speakify/utils/bluetooth_platform.dart';
 
 /// Service that discovers nearby Bluetooth audio devices
 /// and exposes them as a stream of [PeerDevice] objects.
@@ -11,8 +12,8 @@ import 'package:speakify/models/slave_connection_type.dart';
 /// 1. **Bonded devices** — already-paired classic BT devices (neckbands, speakers, etc.)
 /// 2. **BLE scan** — discovers BLE-advertising devices (modern speakers/headphones)
 ///
-/// Most audio devices use classic Bluetooth (A2DP), NOT BLE.
-/// So we rely primarily on bonded devices for audio device discovery.
+/// Uses a **platform channel** to check classic BT connection state,
+/// since flutter_blue_plus only tracks BLE connections.
 class BluetoothScanService {
   // ── Stream setup ─────────────────────────────────────────────
   final StreamController<List<PeerDevice>> _deviceController =
@@ -73,14 +74,19 @@ class BluetoothScanService {
         if (name.isEmpty) continue;
 
         final macAddress = device.remoteId.str;
+
+        // Check ACTUAL classic BT connection state via platform channel.
+        // flutter_blue_plus can't check this — it only knows about BLE.
+        final isConnected = await BluetoothPlatform.isDeviceConnected(macAddress);
+
         _foundDevices[macAddress] = PeerDevice(
           id: macAddress,
           name: name,
           connectionType: _guessDeviceTypeFromName(name),
-          isConnected: false,
-          latencyMs: null,
+          isConnected: isConnected,
+          latencyMs: isConnected ? 150 : null, // Estimated BT latency
         );
-        debugPrint('  Bonded: $name ($macAddress)');
+        debugPrint('  Bonded: $name ($macAddress) connected=$isConnected');
       }
 
       // Push bonded devices to UI immediately.
