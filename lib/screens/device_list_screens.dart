@@ -8,6 +8,7 @@ import 'package:gradient_borders/gradient_borders.dart';
 import 'package:speakify/utils/constants.dart';
 import 'package:speakify/services/bluetooth_scan_service.dart';
 import 'package:speakify/services/wifi_connection_service.dart';
+import 'package:speakify/services/audio_capture_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -29,6 +30,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   late WifiConnectionService _wifiService;
   List<PeerDevice> _wifiDevices = [];
   StreamSubscription<List<PeerDevice>>? _wifiSubscription;
+
+  // ── Audio capture (Master only) ────────────────────────────
+  AudioCaptureService? _audioService;
+  bool _isCapturing = false;
 
   // ── Slave mode: IP input ───────────────────────────────────
   final TextEditingController _ipController = TextEditingController();
@@ -53,6 +58,11 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       if (mounted) setState(() => _wifiDevices = devices);
     });
 
+    // ── Audio capture (Master only) ───────────────────────────
+    if (widget.role == DeviceRole.master) {
+      _audioService = AudioCaptureService();
+    }
+
     // Start scanning / server based on role.
     _initialize();
   }
@@ -66,7 +76,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     // Master: start the TCP server.
     if (widget.role == DeviceRole.master) {
       await _wifiService.startServer();
-      // Force a rebuild to show the IP address.
       if (mounted) setState(() {});
     }
 
@@ -92,10 +101,29 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (mounted) {
       setState(() => _isConnecting = false);
       if (success) {
-        // Clear the text field after successful connection.
         _ipController.clear();
       }
     }
+  }
+
+  /// Master mode: toggle audio capture.
+  Future<void> _toggleCapture() async {
+    if (_audioService == null) return;
+
+    if (_isCapturing) {
+      await _audioService!.stopCapture();
+    } else {
+      await _audioService!.startCapture();
+    }
+    if (mounted) {
+      setState(() => _isCapturing = _audioService!.isCapturing);
+    }
+  }
+
+  /// Master mode: change audio input source.
+  void _setAudioSource(AudioInputSource source) {
+    _audioService?.setSource(source);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -104,6 +132,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _btService.dispose();
     _wifiSubscription?.cancel();
     _wifiService.dispose();
+    _audioService?.dispose();
     _ipController.dispose();
     super.dispose();
   }
@@ -153,6 +182,11 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
               isConnecting: _isConnecting,
               isConnectedToMaster: _wifiService.isConnectedToMaster,
               onConnect: !isMaster ? _connectToMaster : null,
+              // Audio capture props (Master only)
+              audioService: _audioService,
+              isCapturing: _isCapturing,
+              onToggleCapture: isMaster ? _toggleCapture : null,
+              onSetAudioSource: isMaster ? _setAudioSource : null,
             ),
     );
   }
@@ -185,6 +219,7 @@ class _EmptySearchState extends StatelessWidget {
 
 /// Shows two sections: Wi-Fi Phones and Bluetooth Devices.
 /// Also shows Master IP or Slave IP input depending on the role.
+/// In Master mode, also shows the Audio Source card.
 class _DeviceListBody extends StatelessWidget {
   final List<PeerDevice> devices;
   final bool isMaster;
@@ -194,6 +229,12 @@ class _DeviceListBody extends StatelessWidget {
   final bool isConnectedToMaster;
   final VoidCallback? onConnect;
 
+  // Audio capture props (Master only)
+  final AudioCaptureService? audioService;
+  final bool isCapturing;
+  final VoidCallback? onToggleCapture;
+  final void Function(AudioInputSource)? onSetAudioSource;
+
   const _DeviceListBody({
     required this.devices,
     required this.isMaster,
@@ -202,6 +243,10 @@ class _DeviceListBody extends StatelessWidget {
     this.isConnecting = false,
     this.isConnectedToMaster = false,
     this.onConnect,
+    this.audioService,
+    this.isCapturing = false,
+    this.onToggleCapture,
+    this.onSetAudioSource,
   });
 
   @override
@@ -224,6 +269,15 @@ class _DeviceListBody extends StatelessWidget {
             isConnecting: isConnecting,
             isConnected: isConnectedToMaster,
             onConnect: onConnect!,
+          ),
+
+        // ── Master: Audio Source card ──────────────────────────
+        if (isMaster && audioService != null)
+          _AudioSourceCard(
+            audioService: audioService!,
+            isCapturing: isCapturing,
+            onToggleCapture: onToggleCapture!,
+            onSetSource: onSetAudioSource!,
           ),
 
         const SizedBox(height: 12),
@@ -638,6 +692,313 @@ class _DeviceTile extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Audio source selector + capture controls for Master mode.
+/// Shows source radio buttons, start/stop button, and live level meter.
+class _AudioSourceCard extends StatelessWidget {
+  final AudioCaptureService audioService;
+  final bool isCapturing;
+  final VoidCallback onToggleCapture;
+  final void Function(AudioInputSource) onSetSource;
+
+  const _AudioSourceCard({
+    required this.audioService,
+    required this.isCapturing,
+    required this.onToggleCapture,
+    required this.onSetSource,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final currentSource = audioService.currentSource;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isCapturing
+              ? AppColors.success.withValues(alpha: 0.5)
+              : AppColors.accent.withValues(alpha: 0.3),
+        ),
+        boxShadow: isCapturing
+            ? [
+                BoxShadow(
+                  color: AppColors.success.withValues(alpha: 0.1),
+                  blurRadius: 16,
+                  spreadRadius: 2,
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header ──────────────────────────────────────────
+          Row(
+            children: [
+              Icon(
+                isCapturing ? Icons.graphic_eq_rounded : Icons.music_note_rounded,
+                color: isCapturing ? AppColors.success : AppColors.accent,
+                size: 22,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Audio Source',
+                style: AppTextStyles.titleMedium.copyWith(
+                  color: isCapturing ? AppColors.success : AppColors.accent,
+                ),
+              ),
+              const Spacer(),
+              if (isCapturing)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                          color: AppColors.success,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'LIVE',
+                        style: AppTextStyles.labelSmall.copyWith(
+                          color: AppColors.success,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // ── Source selection ─────────────────────────────────
+          // AUX option
+          _SourceOption(
+            icon: Icons.cable_rounded,
+            label: 'AUX (3.5mm cable)',
+            subtitle: 'Line-in from TV / Console',
+            isSelected: currentSource == AudioInputSource.aux,
+            isEnabled: !isCapturing,
+            onTap: () => onSetSource(AudioInputSource.aux),
+          ),
+          const SizedBox(height: 6),
+          // BT A2DP option (coming soon)
+          _SourceOption(
+            icon: Icons.bluetooth_audio_rounded,
+            label: 'Bluetooth A2DP',
+            subtitle: 'Coming soon',
+            isSelected: currentSource == AudioInputSource.bluetoothA2dp,
+            isEnabled: false, // Not implemented yet
+            onTap: () {},
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── Capture button ──────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onToggleCapture,
+              icon: Icon(
+                isCapturing ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                size: 22,
+              ),
+              label: Text(
+                isCapturing ? 'Stop Capture' : 'Start Capture',
+                style: AppTextStyles.titleMedium.copyWith(
+                  color: isCapturing ? AppColors.error : AppColors.background,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isCapturing
+                    ? AppColors.error.withValues(alpha: 0.15)
+                    : AppColors.accent,
+                foregroundColor: isCapturing ? AppColors.error : AppColors.background,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                side: isCapturing
+                    ? BorderSide(color: AppColors.error.withValues(alpha: 0.5))
+                    : BorderSide.none,
+              ),
+            ),
+          ),
+
+          // ── Audio level meter (only visible while capturing) ──
+          if (isCapturing) ...[
+            const SizedBox(height: 16),
+            ValueListenableBuilder<double>(
+              valueListenable: audioService.audioLevel,
+              builder: (context, level, _) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Audio Level', style: AppTextStyles.labelSmall),
+                        Text(
+                          '${(level * 100).toStringAsFixed(0)}%',
+                          style: AppTextStyles.labelSmall.copyWith(
+                            color: _levelColor(level),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Level bar
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: level,
+                        minHeight: 8,
+                        backgroundColor: AppColors.surface,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          _levelColor(level),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+
+          // ── Config info ─────────────────────────────────────
+          const SizedBox(height: 12),
+          Center(
+            child: Text(
+              '${AudioCaptureService.sampleRate} Hz • '
+              '${AudioCaptureService.numChannels == 1 ? "Mono" : "Stereo"} • '
+              'PCM ${AudioCaptureService.bitsPerSample}-bit',
+              style: AppTextStyles.labelSmall.copyWith(
+                color: AppColors.textDisabled,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Return green/yellow/red based on audio level.
+  Color _levelColor(double level) {
+    if (level < 0.4) return AppColors.success;
+    if (level < 0.75) return AppColors.warning;
+    return AppColors.error;
+  }
+}
+
+/// A single radio-style source option row.
+class _SourceOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool isSelected;
+  final bool isEnabled;
+  final VoidCallback onTap;
+
+  const _SourceOption({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.isSelected,
+    required this.isEnabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = !isEnabled
+        ? AppColors.textDisabled
+        : isSelected
+            ? AppColors.accent
+            : AppColors.textSecondary;
+
+    return GestureDetector(
+      onTap: isEnabled ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.accent.withValues(alpha: 0.08) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected
+                ? AppColors.accent.withValues(alpha: 0.3)
+                : Colors.transparent,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: color,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: AppTextStyles.labelSmall.copyWith(
+                      color: AppColors.textDisabled,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Radio indicator
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: color, width: 2),
+              ),
+              child: isSelected
+                  ? Center(
+                      child: Container(
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+          ],
         ),
       ),
     );

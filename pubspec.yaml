@@ -40,6 +40,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   device_info_plus: ^12.4.0
   fluttertoast: ^9.0.0
+  record: ^6.2.1
 
 dev_dependencies:
   flutter_test:

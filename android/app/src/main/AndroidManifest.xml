@@ -19,6 +19,9 @@
     <!-- Nearby Devices (Android 13+) -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"/>
 
+    <!--Audio permission-->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
     <application
         android:label="Speakify"
         android:name="${applicationName}"

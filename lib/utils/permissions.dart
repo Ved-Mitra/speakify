@@ -16,6 +16,7 @@ class PermissionHelper {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.nearbyWifiDevices,
+      Permission.microphone,
     ].request();
 
     return statuses.values.every((s) => s.isGranted);
@@ -30,6 +31,7 @@ class PermissionHelper {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.nearbyWifiDevices,
+      Permission.microphone,
     ];
 
     final Map<String, bool> results = {};
@@ -49,6 +51,7 @@ class PermissionHelper {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.nearbyWifiDevices,
+      Permission.microphone,
     ];
 
     for (final perm in permissions) {
