@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:speakify/models/device_role.dart';
 import 'package:speakify/models/slave_connection_type.dart';
@@ -9,6 +10,8 @@ import 'package:speakify/utils/constants.dart';
 import 'package:speakify/services/bluetooth_scan_service.dart';
 import 'package:speakify/services/wifi_connection_service.dart';
 import 'package:speakify/services/audio_capture_service.dart';
+import 'package:speakify/services/udp_receiver_service.dart';
+import 'package:speakify/services/udp_streamer_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -34,6 +37,13 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   // ── Audio capture (Master only) ────────────────────────────
   AudioCaptureService? _audioService;
   bool _isCapturing = false;
+  StreamSubscription<Uint8List>? _captureSubscription; // PCM → UDP pipeline
+
+  // Audio -- send : Master
+  UdpStreamerService? _udpStreamer;
+
+  // Audio -- receive : Slave
+  UdpReceiverService? _udpReceiver;
 
   // ── Slave mode: IP input ───────────────────────────────────
   final TextEditingController _ipController = TextEditingController();
@@ -58,9 +68,15 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       if (mounted) setState(() => _wifiDevices = devices);
     });
 
-    // ── Audio capture (Master only) ───────────────────────────
+    // ── Audio capture + UDP streamer (Master only) ────────────
     if (widget.role == DeviceRole.master) {
       _audioService = AudioCaptureService();
+      _udpStreamer = UdpStreamerService();
+    }
+
+    // ── UDP receiver (Slave only) ─────────────────────────────
+    if (widget.role == DeviceRole.slave) {
+      _udpReceiver = UdpReceiverService();
     }
 
     // Start scanning / server based on role.
@@ -106,14 +122,45 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     }
   }
 
-  /// Master mode: toggle audio capture.
+  // Master mode: start the UDP streamer and pipe audio into it.
+  Future<void> _startAudioStreaming() async {
+    if (_udpStreamer == null) return;
+
+    // Start the UDP socket.
+    await _udpStreamer!.start();
+
+    // Add all currently connected slave IPs to the streamer.
+    for (final device in _wifiDevices) {
+      if (device.ipAddress != null) {
+        _udpStreamer!.addSlave(device.ipAddress!);
+      }
+    }
+
+    // Pipe every PCM chunk from AudioCaptureService → UdpStreamerService.
+    _captureSubscription = _audioService!.audioStream.listen(
+      (Uint8List pcmChunk) {
+        _udpStreamer!.send(pcmChunk);
+      },
+    );
+  }
+
+  // Master mode: stop the UDP streamer and cancel the pipeline.
+  Future<void> _stopAudioStreaming() async {
+    await _captureSubscription?.cancel();
+    _captureSubscription = null;
+    _udpStreamer?.stop();
+  }
+
+  /// Master mode: toggle audio capture + streaming.
   Future<void> _toggleCapture() async {
     if (_audioService == null) return;
 
     if (_isCapturing) {
+      await _stopAudioStreaming();
       await _audioService!.stopCapture();
     } else {
-      await _audioService!.startCapture();
+      final started = await _audioService!.startCapture();
+      if (started) await _startAudioStreaming();
     }
     if (mounted) {
       setState(() => _isCapturing = _audioService!.isCapturing);
@@ -132,7 +179,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _btService.dispose();
     _wifiSubscription?.cancel();
     _wifiService.dispose();
+    _captureSubscription?.cancel();
     _audioService?.dispose();
+    _udpStreamer?.dispose();
+    _udpReceiver?.dispose();
     _ipController.dispose();
     super.dispose();
   }
@@ -259,8 +309,7 @@ class _DeviceListBody extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
         // ── Master: Show IP address ────────────────────────────
-        if (isMaster && masterIp != null)
-          _MasterIpBanner(ip: masterIp!),
+        if (isMaster && masterIp != null) _MasterIpBanner(ip: masterIp!),
 
         // ── Slave: Show IP input + Connect button ──────────────
         if (!isMaster)
@@ -290,7 +339,10 @@ class _DeviceListBody extends StatelessWidget {
             children: [
               Text('All Connected', style: AppTextStyles.titleLarge),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.primary.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
@@ -324,10 +376,12 @@ class _DeviceListBody extends StatelessWidget {
             ),
           )
         else
-          ...wifiDevices.map((device) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _DeviceTile(device: device),
-              )),
+          ...wifiDevices.map(
+            (device) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _DeviceTile(device: device),
+            ),
+          ),
 
         const SizedBox(height: 20),
 
@@ -349,10 +403,12 @@ class _DeviceListBody extends StatelessWidget {
             ),
           )
         else
-          ...btDevices.map((device) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _DeviceTile(device: device),
-              )),
+          ...btDevices.map(
+            (device) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _DeviceTile(device: device),
+            ),
+          ),
 
         // Only show on Master mode
         if (isMaster) ...[
@@ -388,13 +444,15 @@ class _MasterIpBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.3),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
-          Icon(Icons.wifi_tethering_rounded, color: AppColors.primary, size: 28),
+          Icon(
+            Icons.wifi_tethering_rounded,
+            color: AppColors.primary,
+            size: 28,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -479,7 +537,9 @@ class _SlaveConnectCard extends StatelessWidget {
             // IP input field
             TextField(
               controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               style: AppTextStyles.bodyLarge,
               decoration: InputDecoration(
                 hintText: 'Enter Master IP (e.g., 192.168.1.5)',
@@ -490,11 +550,15 @@ class _SlaveConnectCard extends StatelessWidget {
                 ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                  borderSide: BorderSide(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                  ),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                  borderSide: BorderSide(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                  ),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -563,10 +627,7 @@ class _SectionHeader extends StatelessWidget {
         children: [
           Icon(icon, color: color, size: 20),
           const SizedBox(width: 8),
-          Text(
-            title,
-            style: AppTextStyles.titleMedium.copyWith(color: color),
-          ),
+          Text(title, style: AppTextStyles.titleMedium.copyWith(color: color)),
           const Spacer(),
           Text(
             '$count connected',
@@ -606,14 +667,17 @@ class _DeviceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color accentColor =
-        device.isConnected ? AppColors.success : AppColors.textDisabled;
+    final Color accentColor = device.isConnected
+        ? AppColors.success
+        : AppColors.textDisabled;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          debugPrint('Tapped device: ${device.name} (${device.connectionType.name})');
+          debugPrint(
+            'Tapped device: ${device.name} (${device.connectionType.name})',
+          );
         },
         splashColor: accentColor.withValues(alpha: 0.1),
         highlightColor: accentColor.withValues(alpha: 0.05),
@@ -671,17 +735,19 @@ class _DeviceTile extends StatelessWidget {
                       vertical: 2,
                     ),
                     decoration: BoxDecoration(
-                      color: (device.isBluetooth
-                              ? AppColors.secondary
-                              : AppColors.primary)
-                          .withValues(alpha: 0.15),
+                      color:
+                          (device.isBluetooth
+                                  ? AppColors.secondary
+                                  : AppColors.primary)
+                              .withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       device.isBluetooth ? 'BT' : 'Wi-Fi',
                       style: AppTextStyles.labelSmall.copyWith(
-                        color:
-                            device.isBluetooth ? AppColors.secondary : AppColors.primary,
+                        color: device.isBluetooth
+                            ? AppColors.secondary
+                            : AppColors.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -745,7 +811,9 @@ class _AudioSourceCard extends StatelessWidget {
           Row(
             children: [
               Icon(
-                isCapturing ? Icons.graphic_eq_rounded : Icons.music_note_rounded,
+                isCapturing
+                    ? Icons.graphic_eq_rounded
+                    : Icons.music_note_rounded,
                 color: isCapturing ? AppColors.success : AppColors.accent,
                 size: 22,
               ),
@@ -759,7 +827,10 @@ class _AudioSourceCard extends StatelessWidget {
               const Spacer(),
               if (isCapturing)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.success.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(8),
@@ -835,7 +906,9 @@ class _AudioSourceCard extends StatelessWidget {
                 backgroundColor: isCapturing
                     ? AppColors.error.withValues(alpha: 0.15)
                     : AppColors.accent,
-                foregroundColor: isCapturing ? AppColors.error : AppColors.background,
+                foregroundColor: isCapturing
+                    ? AppColors.error
+                    : AppColors.background,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -936,15 +1009,17 @@ class _SourceOption extends StatelessWidget {
     final color = !isEnabled
         ? AppColors.textDisabled
         : isSelected
-            ? AppColors.accent
-            : AppColors.textSecondary;
+        ? AppColors.accent
+        : AppColors.textSecondary;
 
     return GestureDetector(
       onTap: isEnabled ? onTap : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.accent.withValues(alpha: 0.08) : Colors.transparent,
+          color: isSelected
+              ? AppColors.accent.withValues(alpha: 0.08)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isSelected
@@ -964,7 +1039,9 @@ class _SourceOption extends StatelessWidget {
                     label,
                     style: AppTextStyles.bodySmall.copyWith(
                       color: color,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
                     ),
                   ),
                   Text(

@@ -52,9 +52,7 @@ class WifiConnectionService {
   /// The local Wi-Fi IP address (available after startServer).
   String? get localIp => _localIp;
 
-  // ═══════════════════════════════════════════════════════════
   //  MASTER MODE — TCP Server
-  // ═══════════════════════════════════════════════════════════
 
   /// Start the TCP server. Call this in Master mode.
   Future<bool> startServer() async {
@@ -244,9 +242,7 @@ class WifiConnectionService {
     debugPrint('Server stopped');
   }
 
-  // ═══════════════════════════════════════════════════════════
   //  SLAVE MODE — TCP Client
-  // ═══════════════════════════════════════════════════════════
 
   /// Connect to the Master's server. Call this in Slave mode.
   /// [masterIp] is the IP address entered by the user.
@@ -345,9 +341,7 @@ class WifiConnectionService {
     debugPrint('Disconnected from Master');
   }
 
-  // ═══════════════════════════════════════════════════════════
   //  SHARED HELPERS
-  // ═══════════════════════════════════════════════════════════
 
   /// Send a JSON message to a socket (newline-terminated).
   void _sendMessage(Socket socket, Map<String, dynamic> message) {
