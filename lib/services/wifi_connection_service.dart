@@ -26,6 +26,7 @@ class WifiConnectionService {
   ServerSocket? _server;
   final Map<String, Socket> _clients = {}; // deviceId → socket
   final List<PeerDevice> _connectedDevices = [];
+  Timer? _pingTimer;
 
   // ── Client-side state (Slave) ───────────────────────────────
   Socket? _slaveSocket;
@@ -76,6 +77,9 @@ class WifiConnectionService {
         onError: (e) => debugPrint('Server listen error: $e'),
         cancelOnError: false,
       );
+
+      // Start periodic pings to measure network latency
+      _pingTimer = Timer.periodic(const Duration(seconds: 2), (_) => _sendPingsToAll());
 
       return true;
     } catch (e) {
@@ -176,8 +180,21 @@ class WifiConnectionService {
 
       showToast('$deviceName connected');
       debugPrint('Handshake complete with $deviceName ($deviceId)');
+    } else if (type == 'pong') {
+      final int sentTime = message['timestamp'] as int;
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      final int rtt = now - sentTime;
+      final int latency = rtt ~/ 2;
+
+      // Update the device's latency property and notify UI
+      if (clientDevice != null) {
+        final index = _connectedDevices.indexWhere((d) => d.id == clientDevice.id);
+        if (index != -1) {
+          _connectedDevices[index] = _connectedDevices[index].copyWith(latencyMs: latency);
+          _notifyDeviceListChanged();
+        }
+      }
     }
-    // Future message types (ping/pong, etc.) handled here.
   }
 
   /// Handle a client disconnection (either error or graceful close).
@@ -228,10 +245,11 @@ class WifiConnectionService {
 
   /// Stop the TCP server and disconnect all clients.
   Future<void> stopServer() async {
-    // Close all client sockets.
-    for (final socket in _clients.values) {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    for (final client in _clients.values) {
       try {
-        socket.destroy();
+        client.destroy();
       } catch (_) {}
     }
     _clients.clear();
@@ -334,6 +352,14 @@ class WifiConnectionService {
       case 'device_left':
         showToast('${message["deviceName"]} left');
         break;
+      case 'ping':
+        if (_slaveSocket != null) {
+          _sendMessage(_slaveSocket!, {
+            'type': 'pong',
+            'timestamp': message['timestamp'],
+          });
+        }
+        break;
       default:
         debugPrint('Unknown message type: $type');
     }
@@ -370,7 +396,17 @@ class WifiConnectionService {
     }
   }
 
-  /// Push the current device list to all stream listeners (UI).
+  /// Sends a ping to all connected clients to measure latency.
+  void _sendPingsToAll() {
+    if (_clients.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _broadcastToAll({
+      'type': 'ping',
+      'timestamp': now,
+    });
+  }
+
+  /// Helper to push a fresh copy of the connected devices list to the stream.
   void _notifyDeviceListChanged() {
     if (!_deviceStreamController.isClosed) {
       _deviceStreamController.add(List.from(_connectedDevices));
