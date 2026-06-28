@@ -147,7 +147,19 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       'Slave: UDP receiver started on port ${UdpReceiverService.audioPort}',
     );
 
+    // Diagnostic: log every 100th packet so we know data is flowing
+    int _packetCount = 0;
+    _udpReceiver!.pcmStream.listen((Uint8List pcmData) {
+      _packetCount++;
+      if (_packetCount % 100 == 0) {
+        debugPrint(
+          'Slave: $_packetCount packets received (${pcmData.length} bytes each)',
+        );
+      }
+    });
+
     // Start playing the incoming PCM stream through the speaker.
+    debugPrint('Slave: Starting audio playback...');
     await _audioPlayback!.startPlayback(_udpReceiver!.pcmStream);
     debugPrint('Slave: Playback started');
   }
