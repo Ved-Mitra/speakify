@@ -12,6 +12,7 @@ import 'package:speakify/services/wifi_connection_service.dart';
 import 'package:speakify/services/audio_capture_service.dart';
 import 'package:speakify/services/udp_receiver_service.dart';
 import 'package:speakify/services/udp_streamer_service.dart';
+import 'package:speakify/services/audio_playback_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -42,8 +43,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   // Audio -- send : Master
   UdpStreamerService? _udpStreamer;
 
-  // Audio -- receive : Slave
+  // Audio -- receive + playback : Slave
   UdpReceiverService? _udpReceiver;
+  AudioPlaybackService? _audioPlayback;
 
   // ── Slave mode: IP input ───────────────────────────────────
   final TextEditingController _ipController = TextEditingController();
@@ -83,9 +85,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       _udpStreamer = UdpStreamerService();
     }
 
-    // ── UDP receiver (Slave only) ─────────────────────────────
+    // ── UDP receiver + Playback (Slave only) ──────────────────
     if (widget.role == DeviceRole.slave) {
       _udpReceiver = UdpReceiverService();
+      _audioPlayback = AudioPlaybackService();
     }
 
     // Start scanning / server based on role.
@@ -132,18 +135,18 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     }
   }
 
-  // Slave mode: start receiving UDP audio packets from Master
+  // Slave mode: start receiving UDP audio packets and play them.
   Future<void> _startAudioReceiving() async {
-    if (_udpReceiver == null) return;
+    if (_udpReceiver == null || _audioPlayback == null) return;
 
     await _udpReceiver!.start();
     debugPrint(
       'Slave: UDP receiver started on port ${UdpReceiverService.audioPort}',
     );
 
-    _udpReceiver!.pcmStream.listen((Uint8List pcmData) {
-      debugPrint('Slave: Received ${pcmData.length} bytes of PCM data');
-    });
+    // Start playing the incoming PCM stream through the speaker.
+    await _audioPlayback!.startPlayback(_udpReceiver!.pcmStream);
+    debugPrint('Slave: Playback started');
   }
 
   // Master mode: start the UDP streamer and pipe audio into it.
@@ -206,6 +209,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _captureSubscription?.cancel();
     _audioService?.dispose();
     _udpStreamer?.dispose();
+    _audioPlayback?.dispose();
     _udpReceiver?.dispose();
     _ipController.dispose();
     super.dispose();
