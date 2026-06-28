@@ -89,6 +89,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (widget.role == DeviceRole.slave) {
       _udpReceiver = UdpReceiverService();
       _audioPlayback = AudioPlaybackService();
+
+      // React when the Master disconnects (socket closed / error)
+      _wifiService.masterConnectionNotifier.addListener(_onMasterConnectionChanged);
     }
 
     // Start scanning / server based on role.
@@ -200,11 +203,24 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (mounted) setState(() {});
   }
 
+  // Slave mode: react when master connection state changes
+  void _onMasterConnectionChanged() {
+    if (!mounted) return;
+    final connected = _wifiService.masterConnectionNotifier.value;
+    setState(() {}); // rebuild the UI badge
+    if (!connected) {
+      // Stop receiving and playback when master disappears
+      _audioPlayback?.stopPlayback();
+      _udpReceiver?.stop();
+    }
+  }
+
   @override
   void dispose() {
     _btSubscription?.cancel();
     _btService.dispose();
     _wifiSubscription?.cancel();
+    _wifiService.masterConnectionNotifier.removeListener(_onMasterConnectionChanged);
     _wifiService.dispose();
     _captureSubscription?.cancel();
     _audioService?.dispose();

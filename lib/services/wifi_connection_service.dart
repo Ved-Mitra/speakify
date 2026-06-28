@@ -31,6 +31,10 @@ class WifiConnectionService {
   Socket? _slaveSocket;
   bool _isConnectedToMaster = false;
 
+  /// Notifier that fires whenever the Slave's connection to the Master changes.
+  /// The Slave UI listens to this to update the connection badge reactively.
+  final ValueNotifier<bool> masterConnectionNotifier = ValueNotifier(false);
+
   // ── Stream to notify UI of device list changes ──────────────
   final StreamController<List<PeerDevice>> _deviceStreamController = StreamController<List<PeerDevice>>.broadcast();
 
@@ -290,11 +294,13 @@ class WifiConnectionService {
         onError: (e) {
           debugPrint('Connection error: $e');
           _isConnectedToMaster = false;
+          masterConnectionNotifier.value = false;
           showToast('Connection lost');
         },
         onDone: () {
           debugPrint('Server closed the connection');
           _isConnectedToMaster = false;
+          masterConnectionNotifier.value = false;
           showToast('Disconnected from Master');
           try {
             _slaveSocket?.destroy();
@@ -305,6 +311,7 @@ class WifiConnectionService {
       );
 
       _isConnectedToMaster = true;
+      masterConnectionNotifier.value = true;
       return true;
     } catch (e) {
       debugPrint('Unable to connect to Master: $e');
