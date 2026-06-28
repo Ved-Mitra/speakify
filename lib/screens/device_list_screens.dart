@@ -46,6 +46,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   // Audio -- receive + playback : Slave
   UdpReceiverService? _udpReceiver;
   AudioPlaybackService? _audioPlayback;
+  AudioPlaybackService? _masterPlayback;
 
   // ── Slave mode: IP input ───────────────────────────────────
   final TextEditingController _ipController = TextEditingController();
@@ -83,6 +84,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (widget.role == DeviceRole.master) {
       _audioService = AudioCaptureService();
       _udpStreamer = UdpStreamerService();
+      _masterPlayback = AudioPlaybackService();
     }
 
     // ── UDP receiver + Playback (Slave only) ──────────────────
@@ -91,7 +93,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       _audioPlayback = AudioPlaybackService();
 
       // React when the Master disconnects (socket closed / error)
-      _wifiService.masterConnectionNotifier.addListener(_onMasterConnectionChanged);
+      _wifiService.masterConnectionNotifier.addListener(
+        _onMasterConnectionChanged,
+      );
     }
 
     // Start scanning / server based on role.
@@ -164,12 +168,13 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     debugPrint('Slave: Playback started');
   }
 
-  // Master mode: start the UDP streamer and pipe audio into it.
+  // Master mode: start the UDP streamer and pipe audio into it + Audio Playback
   Future<void> _startAudioStreaming() async {
     if (_udpStreamer == null) return;
 
     // Start the UDP socket.
     await _udpStreamer!.start();
+    await _masterPlayback?.startPlayback(_audioService!.audioStream);
 
     // Add all currently connected slave IPs to the streamer.
     for (final device in _wifiDevices) {
@@ -191,6 +196,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     await _captureSubscription?.cancel();
     _captureSubscription = null;
     _udpStreamer?.stop();
+    _masterPlayback?.stopPlayback();
   }
 
   /// Master mode: toggle audio capture + streaming.
@@ -232,11 +238,14 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _btSubscription?.cancel();
     _btService.dispose();
     _wifiSubscription?.cancel();
-    _wifiService.masterConnectionNotifier.removeListener(_onMasterConnectionChanged);
+    _wifiService.masterConnectionNotifier.removeListener(
+      _onMasterConnectionChanged,
+    );
     _wifiService.dispose();
     _captureSubscription?.cancel();
     _audioService?.dispose();
     _udpStreamer?.dispose();
+    _masterPlayback?.dispose();
     _audioPlayback?.dispose();
     _udpReceiver?.dispose();
     _ipController.dispose();
