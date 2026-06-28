@@ -45,6 +45,7 @@ dependencies:
   opus_flutter: ^3.0.3
   just_audio: ^0.10.5
   flutter_pcm_sound: ^3.3.3
+  collection: ^1.19.1
 
 dev_dependencies:
   flutter_test:

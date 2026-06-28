@@ -13,6 +13,7 @@ import 'package:speakify/services/audio_capture_service.dart';
 import 'package:speakify/services/udp_receiver_service.dart';
 import 'package:speakify/services/udp_streamer_service.dart';
 import 'package:speakify/services/audio_playback_service.dart';
+import 'package:speakify/services/jitter_buffer_service.dart';
 
 class DeviceListScreen extends StatefulWidget {
   final DeviceRole role;
@@ -47,6 +48,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   UdpReceiverService? _udpReceiver;
   AudioPlaybackService? _audioPlayback;
   AudioPlaybackService? _masterPlayback;
+
+  //Jitter for slave mode only
+  JitterBufferService? _jitterBuffer;
 
   // ── Slave mode: IP input ───────────────────────────────────
   final TextEditingController _ipController = TextEditingController();
@@ -91,6 +95,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (widget.role == DeviceRole.slave) {
       _udpReceiver = UdpReceiverService();
       _audioPlayback = AudioPlaybackService();
+      _jitterBuffer = JitterBufferService(60);
 
       // React when the Master disconnects (socket closed / error)
       _wifiService.masterConnectionNotifier.addListener(
@@ -153,18 +158,19 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
     // Diagnostic: log every 100th packet so we know data is flowing
     int _packetCount = 0;
-    _udpReceiver!.pcmStream.listen((Uint8List pcmData) {
+    _udpReceiver!.pcmStream.listen((AudioPacket pcmData) {
       _packetCount++;
       if (_packetCount % 100 == 0) {
         debugPrint(
-          'Slave: $_packetCount packets received (${pcmData.length} bytes each)',
+          'Slave: $_packetCount packets received (${pcmData.pcm.length} bytes each)',
         );
       }
     });
 
     // Start playing the incoming PCM stream through the speaker.
     debugPrint('Slave: Starting audio playback...');
-    await _audioPlayback!.startPlayback(_udpReceiver!.pcmStream);
+    await _jitterBuffer!.start(_udpReceiver!.pcmStream);
+    await _audioPlayback!.startPlayback(_jitterBuffer!.pcmStream);
     debugPrint('Slave: Playback started');
   }
 
@@ -249,6 +255,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _audioPlayback?.dispose();
     _udpReceiver?.dispose();
     _ipController.dispose();
+    _jitterBuffer?.dispose();
     super.dispose();
   }
 
