@@ -11,15 +11,21 @@ class UdpReceiverService {
   int _lastSequence = -1;
 
   bool _verifyPacket(Uint8List data) {
-    final buffer = data.buffer.asByteData();
-    final currentSeq = buffer.getUint32(0, Endian.big);
-    if (_lastSequence != -1 && currentSeq != _lastSequence + 1) {
-      debugPrint("Missing Packet");
+    if (data.length < 14) {
+      debugPrint("Packet too small");
       return false;
     }
+    
+    final buffer = ByteData.sublistView(data);
+    final currentSeq = buffer.getUint32(0, Endian.big);
+    
+    if (_lastSequence != -1 && currentSeq != _lastSequence + 1) {
+      debugPrint("Missing Packet(s): expected ${_lastSequence + 1}, got $currentSeq");
+    }
+    
     final payloadLength = buffer.getUint16(12, Endian.big);
     if (data.length != payloadLength + 14) {
-      debugPrint("Payload loss");
+      debugPrint("Payload loss or malformed packet");
       return false;
     }
     return true;
@@ -29,7 +35,7 @@ class UdpReceiverService {
     if (!_verifyPacket(data)) {
       return;
     }
-    _lastSequence = data.buffer.asByteData().getUint32(0, Endian.big);
+    _lastSequence = ByteData.sublistView(data).getUint32(0, Endian.big);
     Uint8List payload = data.sublist(14);
     _pcmStreamController.add(payload);
   }

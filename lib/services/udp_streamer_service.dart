@@ -33,7 +33,10 @@ class UdpStreamerService {
   }
 
   void addSlave(String ip) {
-    _slaveIps.add(ip);
+    if (!_slaveIps.contains(ip)) {
+      _slaveIps.add(ip);
+      debugPrint('Master: Added slave IP $ip to UDP streamer');
+    }
   }
 
   void send(Uint8List pcmChunk) {

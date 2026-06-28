@@ -66,6 +66,15 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _wifiService = WifiConnectionService();
     _wifiSubscription = _wifiService.connectedDevicesStream.listen((devices) {
       if (mounted) setState(() => _wifiDevices = devices);
+
+      // Master mode: dynamically add newly connected slaves to the UDP streamer
+      if (widget.role == DeviceRole.master && _udpStreamer != null) {
+        for (final device in devices) {
+          if (device.ipAddress != null) {
+            _udpStreamer!.addSlave(device.ipAddress!);
+          }
+        }
+      }
     });
 
     // ── Audio capture + UDP streamer (Master only) ────────────
@@ -118,8 +127,23 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       setState(() => _isConnecting = false);
       if (success) {
         _ipController.clear();
+        _startAudioReceiving();
       }
     }
+  }
+
+  // Slave mode: start receiving UDP audio packets from Master
+  Future<void> _startAudioReceiving() async {
+    if (_udpReceiver == null) return;
+
+    await _udpReceiver!.start();
+    debugPrint(
+      'Slave: UDP receiver started on port ${UdpReceiverService.audioPort}',
+    );
+
+    _udpReceiver!.pcmStream.listen((Uint8List pcmData) {
+      debugPrint('Slave: Received ${pcmData.length} bytes of PCM data');
+    });
   }
 
   // Master mode: start the UDP streamer and pipe audio into it.
@@ -137,11 +161,11 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     }
 
     // Pipe every PCM chunk from AudioCaptureService → UdpStreamerService.
-    _captureSubscription = _audioService!.audioStream.listen(
-      (Uint8List pcmChunk) {
-        _udpStreamer!.send(pcmChunk);
-      },
-    );
+    _captureSubscription = _audioService!.audioStream.listen((
+      Uint8List pcmChunk,
+    ) {
+      _udpStreamer!.send(pcmChunk);
+    });
   }
 
   // Master mode: stop the UDP streamer and cancel the pipeline.

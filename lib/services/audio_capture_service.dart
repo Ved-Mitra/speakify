@@ -23,11 +23,7 @@ class AudioCaptureService {
   static const int numChannels = 1; // Mono — half bandwidth of stereo
   static const int bitsPerSample = 16;
 
-  final RecordConfig _config = const RecordConfig(
-    encoder: AudioEncoder.pcm16bits,
-    sampleRate: sampleRate,
-    numChannels: numChannels,
-  );
+  // _config is now built dynamically in startCapture to pass the device
 
   // ── State ───────────────────────────────────────────────────
   bool _isCapturing = false;
@@ -87,9 +83,39 @@ class AudioCaptureService {
     }
 
     try {
-      // Start streaming raw PCM audio from the input source.
-      // When a 3.5mm cable is plugged in, Android routes input from the cable.
-      final stream = await _recorder.startStream(_config);
+      // 1. List all available input devices
+      final devices = await _recorder.listInputDevices();
+      InputDevice? wiredDevice;
+      
+      debugPrint('--- Available Audio Input Devices ---');
+      for (final d in devices) {
+        debugPrint(' - ${d.label} (ID: ${d.id})');
+        
+        // 2. Look for a wired headset or AUX input
+        final labelLower = d.label.toLowerCase();
+        if (labelLower.contains('wired') || 
+            labelLower.contains('headset') || 
+            labelLower.contains('aux') ||
+            labelLower.contains('usb')) {
+          wiredDevice = d;
+        }
+      }
+
+      if (wiredDevice != null) {
+        debugPrint('AudioCaptureService: Forcing input to wired device: ${wiredDevice.label}');
+      } else {
+        debugPrint('AudioCaptureService: No wired device detected, falling back to default mic.');
+      }
+
+      // Start streaming raw PCM audio from the selected input source.
+      final stream = await _recorder.startStream(
+        RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: sampleRate,
+          numChannels: numChannels,
+          device: wiredDevice, // Force the specific device here!
+        ),
+      );
 
       _recordSubscription = stream.listen(
         (List<int> data) {

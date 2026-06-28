@@ -147,6 +147,7 @@ class WifiConnectionService {
         name: deviceName,
         connectionType: SlaveConnectionType.wifi,
         isConnected: true,
+        ipAddress: clientSocket.remoteAddress.address,
       );
       setClientDevice(device);
 
