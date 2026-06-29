@@ -36,11 +36,16 @@ class WifiConnectionService {
   /// The Slave UI listens to this to update the connection badge reactively.
   final ValueNotifier<bool> masterConnectionNotifier = ValueNotifier(false);
 
+  // Notifier that fires when clock offset changes
+  ValueNotifier<int> clockOffsetUs = ValueNotifier(0);
+
   // ── Stream to notify UI of device list changes ──────────────
-  final StreamController<List<PeerDevice>> _deviceStreamController = StreamController<List<PeerDevice>>.broadcast();
+  final StreamController<List<PeerDevice>> _deviceStreamController =
+      StreamController<List<PeerDevice>>.broadcast();
 
   /// UI listens to this stream to get live updates of connected Wi-Fi devices.
-  Stream<List<PeerDevice>> get connectedDevicesStream => _deviceStreamController.stream;
+  Stream<List<PeerDevice>> get connectedDevicesStream =>
+      _deviceStreamController.stream;
 
   /// Current list of connected devices (for synchronous reads).
   List<PeerDevice> get connectedDevices => List.unmodifiable(_connectedDevices);
@@ -71,7 +76,8 @@ class WifiConnectionService {
       _server!.listen(
         (Socket clientSocket) {
           debugPrint(
-              'Client connected from ${clientSocket.remoteAddress.address}');
+            'Client connected from ${clientSocket.remoteAddress.address}',
+          );
           _handleNewConnection(clientSocket);
         },
         onError: (e) => debugPrint('Server listen error: $e'),
@@ -79,7 +85,10 @@ class WifiConnectionService {
       );
 
       // Start periodic pings to measure network latency
-      _pingTimer = Timer.periodic(const Duration(seconds: 2), (_) => _sendPingsToAll());
+      _pingTimer = Timer.periodic(
+        const Duration(seconds: 2),
+        (_) => _sendPingsToAll(),
+      );
 
       return true;
     } catch (e) {
@@ -185,12 +194,21 @@ class WifiConnectionService {
       final int now = DateTime.now().millisecondsSinceEpoch;
       final int rtt = now - sentTime;
       final int latency = rtt ~/ 2;
+      _sendMessage(clientSocket, {
+        'type': 'clock_sync',
+        'masterTimeUs': now * 1000,
+        'slaveLatencyUs': latency * 1000,
+      });
 
       // Update the device's latency property and notify UI
       if (clientDevice != null) {
-        final index = _connectedDevices.indexWhere((d) => d.id == clientDevice.id);
+        final index = _connectedDevices.indexWhere(
+          (d) => d.id == clientDevice.id,
+        );
         if (index != -1) {
-          _connectedDevices[index] = _connectedDevices[index].copyWith(latencyMs: latency);
+          _connectedDevices[index] = _connectedDevices[index].copyWith(
+            latencyMs: latency,
+          );
           _notifyDeviceListChanged();
         }
       }
@@ -278,7 +296,8 @@ class WifiConnectionService {
         timeout: const Duration(seconds: 5),
       );
       debugPrint(
-          'Connected to Master: ${_slaveSocket!.remoteAddress.address}:${_slaveSocket!.remotePort}');
+        'Connected to Master: ${_slaveSocket!.remoteAddress.address}:${_slaveSocket!.remotePort}',
+      );
 
       // Get this device's info for the handshake.
       final deviceData = await getDeviceNameAndId();
@@ -360,6 +379,15 @@ class WifiConnectionService {
           });
         }
         break;
+      case 'clock_sync':
+        final int masterTimeUs = message['masterTimeUs'] as int;
+        final int latencyUs = message['slaveLatencyUs'] as int;
+        final int localNow = DateTime.now().microsecondsSinceEpoch;
+        // clockOffset = how far the Master clock is ahead of the Slave clock.
+        // Positive means Master is ahead; negative means Slave is ahead.
+        clockOffsetUs.value = (masterTimeUs + latencyUs) - localNow;
+        debugPrint('ClockSync: offset=${clockOffsetUs.value}µs (${(clockOffsetUs.value / 1000).toStringAsFixed(1)}ms)');
+        break;
       default:
         debugPrint('Unknown message type: $type');
     }
@@ -400,10 +428,7 @@ class WifiConnectionService {
   void _sendPingsToAll() {
     if (_clients.isEmpty) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    _broadcastToAll({
-      'type': 'ping',
-      'timestamp': now,
-    });
+    _broadcastToAll({'type': 'ping', 'timestamp': now});
   }
 
   /// Helper to push a fresh copy of the connected devices list to the stream.

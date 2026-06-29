@@ -97,6 +97,11 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       _audioPlayback = AudioPlaybackService();
       _jitterBuffer = JitterBufferService(60);
 
+      // Keep jitter buffer's clock offset in sync with WifiConnectionService.
+      _wifiService.clockOffsetUs.addListener(() {
+        _jitterBuffer?.clockOffsetUs = _wifiService.clockOffsetUs.value;
+      });
+
       // React when the Master disconnects (socket closed / error)
       _wifiService.masterConnectionNotifier.addListener(
         _onMasterConnectionChanged,
@@ -155,17 +160,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     debugPrint(
       'Slave: UDP receiver started on port ${UdpReceiverService.audioPort}',
     );
-
-    // Diagnostic: log every 100th packet so we know data is flowing
-    int _packetCount = 0;
-    _udpReceiver!.pcmStream.listen((AudioPacket pcmData) {
-      _packetCount++;
-      if (_packetCount % 100 == 0) {
-        debugPrint(
-          'Slave: $_packetCount packets received (${pcmData.pcm.length} bytes each)',
-        );
-      }
-    });
 
     // Start playing the incoming PCM stream through the speaker.
     debugPrint('Slave: Starting audio playback...');
@@ -247,6 +241,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _wifiService.masterConnectionNotifier.removeListener(
       _onMasterConnectionChanged,
     );
+    _wifiService.clockOffsetUs.removeListener(() {});
     _wifiService.dispose();
     _captureSubscription?.cancel();
     _audioService?.dispose();
