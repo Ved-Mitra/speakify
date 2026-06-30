@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:speakify/services/opus_encoder_service.dart';
@@ -46,7 +45,7 @@ class UdpStreamerService {
     _opusEncoder.initialize();
     _socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
     _socket?.broadcastEnabled = true;
-    debugPrint('UdpStreamerService: started (opus=${useOpus})');
+    debugPrint('UdpStreamerService: started (opus=$useOpus)');
   }
 
   void addSlave(String ip) {
